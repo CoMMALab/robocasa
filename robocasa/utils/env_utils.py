@@ -1514,23 +1514,53 @@ def no_collision(sim):
 
 def detect_robot_collision(env):
     """
-    Checks if the robot has a collision with any placed fixtures/objects.
+    Checks robot contacts, allowing wheel (including roller) contacts with floors.
+    Wheel bodies are identified by a 'wheel' token in their name; descendants
+    belong to the same wheel. A 'wheeled_base' body is not a wheel.
     Returns:
-        bool: True if a collision is detected between the robot and any other fixtures/objects, False otherwise.
+        bool: True for any other robot contact with a fixture/object.
     """
     if env.robot_geom_ids is None:
+        # Keep this import local to avoid the fixture / scene import cycle.
+        from robocasa.models.fixtures import Floor
+
         env.robot_geom_ids = set()
         robot_geoms = find_elements(
             root=env.robots[0].robot_model.root, tags="geom", return_first=False
         )
         for robot_geom in robot_geoms:
             env.robot_geom_ids.add(env.sim.model.geom_name2id(robot_geom.get("name")))
+
+        env.robot_wheel_geom_ids = set()
+        for geom_id in env.robot_geom_ids:
+            body_id = int(env.sim.model.geom_bodyid[geom_id])
+            while body_id != 0:
+                body_name = env.sim.model.body_id2name(body_id) or ""
+                if "wheel" in body_name.lower().split("_"):  # requires "wheel" to be in geometry body
+                    env.robot_wheel_geom_ids.add(geom_id)
+                    break
+                body_id = int(env.sim.model.body_parentid[body_id])
+
+        env.robot_floor_geom_ids = {
+            env.sim.model.geom_name2id(name)
+            for fixture in env.fixtures.values()
+            if isinstance(fixture, Floor)
+            for name in fixture.contact_geoms
+        }
     for i in range(env.sim.data.ncon):
         geom1 = env.sim.data.contact[i].geom1
         geom2 = env.sim.data.contact[i].geom2
         if (geom1 in env.robot_geom_ids and geom2 not in env.robot_geom_ids) or (
             geom2 in env.robot_geom_ids and geom1 not in env.robot_geom_ids
         ):
+            robot_geom, other_geom = (
+                (geom1, geom2) if geom1 in env.robot_geom_ids else (geom2, geom1)
+            )
+            if (
+                robot_geom in env.robot_wheel_geom_ids
+                and other_geom in env.robot_floor_geom_ids
+            ):
+                continue
             return True
     return False
 
@@ -1584,6 +1614,44 @@ def set_robot_to_position(env, global_pos):
         env.sim.forward()
 
 
+def get_floor_regions(env):
+    """Call after reset, or after the model has been compiled and forwarded."""
+    # Delay fixture imports until package initialization has completed.
+    from robocasa.models.fixtures import Floor
+
+    regions = []
+
+    for fixture in env.fixtures.values():
+        if not isinstance(fixture, Floor):
+            continue
+
+        for name in fixture.contact_geoms:
+            gid = env.sim.model.geom_name2id(name)
+
+            center = env.sim.data.geom_xpos[gid].copy()
+            rotation = env.sim.data.geom_xmat[gid].reshape(3, 3).copy()
+            half_size = env.sim.model.geom_size[gid].copy()
+
+            regions.append((center, rotation, half_size))
+
+    if not regions:
+        raise RuntimeError("No finite floor fixtures found")
+
+    return regions
+
+
+def inside_floor(xy, regions, radius):
+    """Conservatively require a circular footprint inside one floor rectangle."""
+    for center, rotation, half_size in regions:
+        point = np.array([xy[0], xy[1], center[2]])
+        local = rotation.T @ (point - center)
+
+        if np.all(np.abs(local[:2]) + radius <= half_size[:2]):
+            return True
+
+    return False
+
+
 def set_robot_base(
     env,
     anchor_pos,
@@ -1597,7 +1665,7 @@ def set_robot_base(
     The deviation limits are provided by `self.robot_spawn_position_deviation_x`, `self.robot_spawn_position_deviation_y`,
     and `self.robot_spawn_rotation_deviation`.
     Raises:
-        RandomizationError: If the robot cannot be placed without collisions.
+        SamplingError: If no interior, collision-free pose is found within the attempt limit.
     """
     assert len(env.robots) == 1
     # assert isinstance(self.robots[0].robot_model, PandaOmron) or isinstance(
@@ -1617,16 +1685,18 @@ def set_robot_base(
 
     initial_state_copy = env.sim.get_state()
 
-    # Try to move for 100 times to resolve any collision
-    found_valid = False
-    import time
-
-    # t1 = time.time()
     cur_dev_pos_x = pos_dev_x
     cur_dev_pos_y = pos_dev_y
-    while found_valid is not True:
-        # try up to 50 times
-        for attempt_position in range(50):
+
+    floor_regions = get_floor_regions(env)
+    robot_radius = env.robots[0].robot_model.horizontal_radius
+    outside_count = 0
+    collision_count = 0
+    # Every rejected candidate consumes an attempt, including out-of-floor
+    # candidates. Otherwise an invalid initial search region can loop forever.
+    max_batches, attempts_per_batch = 100, 50
+    for _ in range(max_batches):
+        for _ in range(attempts_per_batch):
             robot_pos = generate_random_robot_pos(
                 env=env,
                 anchor_pos=anchor_pos,
@@ -1634,21 +1704,31 @@ def set_robot_base(
                 pos_dev_x=cur_dev_pos_x,
                 pos_dev_y=cur_dev_pos_y,
             )
+
+            if not inside_floor(robot_pos, floor_regions, robot_radius):
+                outside_count += 1
+                continue
+
             set_robot_to_position(env, robot_pos)
             env.sim.forward()
             if not detect_robot_collision(env):
-                found_valid = True
-                break
+                return robot_pos
 
+            collision_count += 1
             env.sim.set_state(initial_state_copy)
-
-        # print(time.time() - t1, attempt_position)
 
         # if valid position not found, increase range by 10 cm for x and 5 cm for y
         cur_dev_pos_x += 0.10
         cur_dev_pos_y += 0.05
 
-    return robot_pos
+    env.sim.set_state(initial_state_copy)
+    env.sim.forward()
+    raise SamplingError(
+        f"Could not spawn robot after {max_batches * attempts_per_batch} attempts: "
+        f"{outside_count} outside floor bounds, {collision_count} colliding. "
+        f"Robot radius={robot_radius:.3f} m, anchor={np.asarray(anchor_pos).tolist()}. "
+        "Check floor coverage, robot clearance, and persistent floor/fixture contacts."
+    )
 
 
 if __name__ == "__main__":
