@@ -1003,8 +1003,8 @@ from robosuite.robots import ALL_ROBOTS
 import mujoco
 
 assert (
-    mujoco.__version__ == "3.3.1"
-), "MuJoCo version must be 3.3.1. Please run pip install mujoco==3.3.1"
+    mujoco.__version__ == "3.6.0"
+), "MuJoCo version must be 3.6.0. Please run pip install mujoco==3.6.0"
 
 import numpy
 

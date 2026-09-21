@@ -9,7 +9,7 @@ from robosuite.wrappers import VisualizationWrapper
 from termcolor import colored
 
 import robocasa.macros as macros
-from robocasa.scripts.collect_demos import collect_human_trajectory
+from robocasa.demos.viewer_utils import add_viewer_arguments, renderer_config, run_passive_viewer
 from robocasa.wrappers.enclosing_wall_render_wrapper import (
     EnclosingWallRenderWrapper,
     install_enclosing_wall_hotkeys,
@@ -67,6 +67,7 @@ if __name__ == "__main__":
     # Arguments
     parser = argparse.ArgumentParser()
     parser.add_argument("--task", type=str, help="task (choose among 365 tasks)")
+    parser.add_argument("--robot", type=str, default="RidgebackDualPanda", help="robot")
     parser.add_argument(
         "--layout", type=int, help="kitchen layout (choose number 1-60)"
     )
@@ -78,6 +79,7 @@ if __name__ == "__main__":
         choices=["keyboard", "spacemouse"],
         help="Teleop device (default: keyboard)",
     )
+    add_viewer_arguments(parser)
     args = parser.parse_args()
 
     tasks = OrderedDict(
@@ -86,7 +88,7 @@ if __name__ == "__main__":
             ("PickPlaceCounterToSink", "pick and place from counter to sink"),
             ("PickPlaceMicrowaveToCounter", "pick and place from microwave to counter"),
             ("PickPlaceStoveToCounter", "pick and place from stove to counter"),
-            ("OpenSingleDoor", "open cabinet or microwave door"),
+            ("OpenCabinet", "open cabinet door"),
             ("CloseDrawer", "close drawer"),
             ("TurnOnMicrowave", "turn on microwave"),
             ("TurnOnSinkFaucet", "turn on sink faucet"),
@@ -107,14 +109,12 @@ if __name__ == "__main__":
     # Create argument configuration
     config = {
         "env_name": args.task,
-        "robots": "PandaOmron",
-        "controller_configs": load_composite_controller_config(robot="PandaOmron"),
+        "robots": args.robot,
+        "controller_configs": load_composite_controller_config(robot=args.robot),
         "layout_ids": args.layout,
         "style_ids": args.style,
         "translucent_robot": True,
     }
-
-    args.renderer = "mjviewer"
 
     print(colored(f"Initializing environment...", "yellow"))
     env = robosuite.make(
@@ -126,11 +126,18 @@ if __name__ == "__main__":
         use_camera_obs=False,
         control_freq=20,
         renderer=args.renderer,
+        renderer_config=renderer_config(args),
     )
 
     # Wrap this with visualization wrapper
     env = VisualizationWrapper(env)
-    env = EnclosingWallRenderWrapper(env, alpha=0.1, enabled=False)
+    env = EnclosingWallRenderWrapper(env, alpha=0.1, enabled=args.renderer == "mjviser")
+    if args.renderer == "mjviser":
+        run_passive_viewer(env, steps=args.steps)
+        raise SystemExit(0)
+
+    from robocasa.scripts.collect_demos import collect_human_trajectory
+
     install_enclosing_wall_hotkeys(env)
 
     # Grab reference to controller config and convert it to json-encoded string

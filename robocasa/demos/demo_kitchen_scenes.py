@@ -12,7 +12,7 @@ from termcolor import colored
 
 import robocasa.macros as macros
 from robocasa.models.scenes.scene_registry import LayoutType, StyleType
-from robocasa.scripts.collect_demos import collect_human_trajectory
+from robocasa.demos.viewer_utils import add_viewer_arguments, renderer_config, run_passive_viewer
 from robocasa.wrappers.enclosing_wall_render_wrapper import (
     EnclosingWallRenderWrapper,
     install_enclosing_wall_hotkeys,
@@ -93,6 +93,7 @@ if __name__ == "__main__":
         choices=["keyboard", "spacemouse"],
         help="Teleop device (default: keyboard)",
     )
+    add_viewer_arguments(parser)
     args = parser.parse_args()
 
     raw_layouts = dict(
@@ -121,8 +122,6 @@ if __name__ == "__main__":
         "translucent_robot": False,
     }
 
-    args.renderer = "mjviewer"
-
     print(colored("Initializing environment...", "yellow"))
 
     env = robosuite.make(
@@ -134,8 +133,17 @@ if __name__ == "__main__":
         use_camera_obs=False,
         control_freq=20,
         renderer=args.renderer,
+        renderer_config=renderer_config(args),
+        layout_ids=args.layout,
+        style_ids=args.style,
     )
     env = EnclosingWallRenderWrapper(env, alpha=0.1, enabled=not args.show_walls)
+    if args.renderer == "mjviser":
+        run_passive_viewer(env, steps=args.steps)
+        sys.exit(0)
+
+    from robocasa.scripts.collect_demos import collect_human_trajectory
+
     install_enclosing_wall_hotkeys(env)
 
     # Grab reference to controller config and convert it to json-encoded string

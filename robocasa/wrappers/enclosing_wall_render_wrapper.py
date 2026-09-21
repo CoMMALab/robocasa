@@ -5,7 +5,6 @@ from typing import Dict, Optional
 import numpy as np
 import yaml
 from robosuite.wrappers import Wrapper
-from pynput.keyboard import Key, Listener
 
 import robocasa.models.scenes.scene_registry as SceneRegistry
 
@@ -182,11 +181,20 @@ class EnclosingWallRenderWrapper(Wrapper):
             for gi in geom_ids.tolist():
                 if int(gi) not in self._saved_alpha:
                     self._saved_alpha[int(gi)] = float(model.geom_rgba[int(gi), 3])
-            model.geom_rgba[geom_ids, 3] = self.alpha
+            # mjviser's mesh exporter takes alpha from the shared material,
+            # ignoring a geometry's partial alpha. Fully hidden geometry is
+            # explicitly omitted by the exporter, so use that for browser walls.
+            alpha = 0.0 if getattr(base, "renderer", None) == "mjviser" else self.alpha
+            model.geom_rgba[geom_ids, 3] = alpha
         else:
             # force walls fully opaque when disabled
             model.geom_rgba[geom_ids, 3] = 1.0
             self._saved_alpha = {}
+
+    def reset_from_xml_string(self, xml_string):
+        result = self.env.reset_from_xml_string(xml_string)
+        self._apply_or_restore()
+        return result
 
     @staticmethod
     def _get_enclosing_wall_names_from_layout(layout_id: int) -> list[str]:
@@ -299,6 +307,8 @@ def install_enclosing_wall_hotkeys(env):
 
     Used by interactive loops that call `EnclosingWallHotkeyHandler.consume_pending()`.
     """
+
+    from pynput.keyboard import Key, Listener
 
     # idempotent-ish: if already installed, no-op
     if getattr(env, "_enclosing_wall_key_listener", None) is not None:

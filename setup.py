@@ -18,7 +18,8 @@ setup(
         "numpy==2.2.5",
         "numba==0.61.2",
         "scipy==1.15.3",
-        "mujoco==3.3.1",
+        "mujoco==3.6.0",  # Minimum supported by mjviser; keep simulation reproducible.
+        "mjviser==0.0.14",
         "pygame",
         "Pillow",
         "opencv-python",

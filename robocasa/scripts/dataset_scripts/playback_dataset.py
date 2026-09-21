@@ -137,7 +137,7 @@ def playback_trajectory_with_env(
         if first:
             break
 
-    if render:
+    if render and env.renderer != "mjviser":
         env.viewer.close()
         env.viewer = None
 
@@ -239,6 +239,8 @@ def playback_dataset(
     extend_states,
     first,
     verbose,
+    renderer="mjviewer",
+    renderer_config=None,
 ):
     dataset = Path(dataset)
     # some arg checking
@@ -285,8 +287,9 @@ def playback_dataset(
 
         env_kwargs = env_meta["env_kwargs"]
         env_kwargs["env_name"] = env_meta["env_name"]
-        env_kwargs["has_renderer"] = False
-        env_kwargs["renderer"] = "mjviewer"
+        env_kwargs["has_renderer"] = render
+        env_kwargs["renderer"] = renderer
+        env_kwargs["renderer_config"] = renderer_config
         env_kwargs["has_offscreen_renderer"] = write_video
         env_kwargs["use_camera_obs"] = False
 
@@ -299,6 +302,10 @@ def playback_dataset(
             )
 
         env = robosuite.make(**env_kwargs)
+        if render and renderer == "mjviser":
+            from robocasa.wrappers.enclosing_wall_render_wrapper import EnclosingWallRenderWrapper
+
+            env = EnclosingWallRenderWrapper(env, enabled=True)
 
     assert filter_key is None, "filter_key not supported for lerobot dataset format"
     demos = LU.get_episodes(dataset)
@@ -312,50 +319,51 @@ def playback_dataset(
     if write_video:
         video_writer = imageio.get_writer(video_path, fps=20)
 
-    for ind in range(len(demos)):
-        ep = demos[ind]
-        print(colored("\nPlaying back episode: {}".format(ep.stem), "yellow"))
+    try:
+        for ind in range(len(demos)):
+            ep = demos[ind]
+            print(colored("\nPlaying back episode: {}".format(ep.stem), "yellow"))
 
-        # prepare initial state to reload from
-        states = LU.get_episode_states(dataset, ind)
-        initial_state = dict(states=states[0])
-        initial_state["model"] = LU.get_episode_model_xml(dataset, ind)
-        initial_state["ep_meta"] = json.dumps(LU.get_episode_meta(dataset, ind))
+            # prepare initial state to reload from
+            states = LU.get_episode_states(dataset, ind)
+            initial_state = dict(states=states[0])
+            initial_state["model"] = LU.get_episode_model_xml(dataset, ind)
+            initial_state["ep_meta"] = json.dumps(LU.get_episode_meta(dataset, ind))
 
-        if extend_states:
-            states = np.concatenate((states, [states[-1]] * 50))
+            if extend_states:
+                states = np.concatenate((states, [states[-1]] * 50))
 
-        # supply actions if using open-loop action playback
-        actions = None
-        assert not (
-            use_actions and use_abs_actions
-        )  # cannot use both relative and absolute actions
-        if use_actions:
-            actions = LU.get_episode_actions(dataset, ind, abs_actions=use_abs_actions)
+            # supply actions if using open-loop action playback
+            actions = None
+            assert not (
+                use_actions and use_abs_actions
+            )  # cannot use both relative and absolute actions
+            if use_actions:
+                actions = LU.get_episode_actions(dataset, ind, abs_actions=use_abs_actions)
 
-        playback_trajectory_with_env(
-            env=env,
-            initial_state=initial_state,
-            states=states,
-            actions=actions,
-            render=render,
-            video_writer=video_writer,
-            video_skip=video_skip,
-            camera_names=render_image_names,
-            first=first,
-            verbose=verbose,
-            camera_height=camera_height,
-            camera_width=camera_width,
-        )
+            playback_trajectory_with_env(
+                env=env,
+                initial_state=initial_state,
+                states=states,
+                actions=actions,
+                render=render,
+                video_writer=video_writer,
+                video_skip=video_skip,
+                camera_names=render_image_names,
+                first=first,
+                verbose=verbose,
+                camera_height=camera_height,
+                camera_width=camera_width,
+            )
+
+    finally:
+        if video_writer is not None:
+            video_writer.close()
+        if env is not None:
+            env.close()
 
     if write_video:
         print(colored(f"Saved video to {video_path}", "green"))
-        video_writer.close()
-
-    if env is not None:
-        env.close()
-    del env
-    del video_writer
 
 
 def get_playback_args():

@@ -11,6 +11,7 @@ import robocasa
 from robocasa.scripts.download_datasets import download_datasets
 from robocasa.scripts.dataset_scripts.playback_dataset import playback_dataset
 from robocasa.utils.dataset_registry_utils import get_ds_path
+from robocasa.demos.viewer_utils import add_viewer_arguments, renderer_config
 
 
 def get_ds_path_any_split(task, source="human"):
@@ -85,6 +86,7 @@ if __name__ == "__main__":
         default="/tmp/robocasa_demo_tasks",
         help="path to video folder for offscreen rendering.",
     )
+    add_viewer_arguments(parser, passive=False)
     args = parser.parse_args()
 
     all_tasks = OrderedDict(
@@ -193,6 +195,8 @@ if __name__ == "__main__":
             extend_states=extend_states,
             first=first,
             verbose=verbose,
+            renderer=args.renderer,
+            renderer_config=renderer_config(args),
         )
         if args.task is not None:
             break
